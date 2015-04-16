@@ -60,7 +60,7 @@ process.")
   :group 'ide-backend-mode)
 
 (defcustom ide-backend-mode-cmd
-  "empty"
+  "cabal"
   "The starting command."
   :type 'string
   :group 'ide-backend-mode)
@@ -89,31 +89,31 @@ the minor mode when it is started, but can be overriden."
              nil "Process already running.")
   (with-current-buffer (ide-backend-mode-buffer)
     (setq buffer-read-only t)
-    (cl-assert ide-backend-mode-package-db nil
-               "The package database has not been set!")
+    (when (string= ide-backend-mode-cmd "empty")
+      (cl-assert ide-backend-mode-package-db nil
+                 "The package database has not been set!"))
     (cd (ide-backend-mode-dir))
     (setq ide-backend-mode-queue (fifo-make))
     (setq ide-backend-mode-current-command nil)
     (setq ide-backend-mode-buffer "")
-    (let ((args
-           (append
-            (list ide-backend-mode-proc-path
-                  "--path" ide-backend-mode-paths
-                  "--package-db" ide-backend-mode-package-db
-                  ide-backend-mode-cmd)
-            (when (string= ide-backend-mode-cmd "cabal")
-              (list default-directory)))))
+    (let* ((is-cabal (string= ide-backend-mode-cmd "cabal"))
+           (args
+            (append
+             (list ide-backend-mode-proc-path)
+             (when (not (string= ide-backend-mode-cmd ""))
+               (list "--path" ide-backend-mode-paths))
+             (when (not is-cabal)
+               (list "--package-db" ide-backend-mode-package-db))
+             (list ide-backend-mode-cmd)
+             (when is-cabal
+               (list "--target" (ide-backend-mode-target)))
+             (when is-cabal (list "./")))))
       (ide-backend-mode-log "Starting: %s\n"
                             (mapconcat #'identity args " "))
-      (let ((process (start-process
-                      (ide-backend-mode-process-name)
-                      nil
-                      ide-backend-mode-proc-path
-                      "--path" ide-backend-mode-paths
-                      "--package-db" ide-backend-mode-package-db
-                      ide-backend-mode-cmd
-                      (when (string= ide-backend-mode-cmd "cabal")
-                        default-directory))))
+      (let ((process (apply 'start-process
+                            (ide-backend-mode-process-name)
+                            nil
+                            args)))
         (set-process-sentinel process 'ide-backend-mode-sentinel)
         (set-process-filter process 'ide-backend-mode-filter)))
     (inferior-ide-backend-mode)))
@@ -204,7 +204,7 @@ the minor mode when it is started, but can be overriden."
                (cdr points))
               " :: "
               (cdr (assoc 'type type))))
-           (list (car (reverse types)))
+           (list (car types))
            "\n")
           'haskell-mode))))))
 
@@ -344,6 +344,27 @@ command."
   "Name for the inferior buffer."
   (format "*ide-backend:%s*"
           name))
+
+(defun ide-backend-mode-target ()
+  "Ask for the projects cabal target"
+  (interactive)
+  (let* ((default-directory (ide-backend-mode-dir))
+         (targets-message (shell-command-to-string "ide-backend-client targets ./"))
+         (targets-json (nth 1 (split-string targets-message "\n")))
+         )
+    (cond
+     ((string-prefix-p "ide-backend-client" targets-json)
+      (error "%s" targets-json))
+     (t
+      (let ((targets (json-read-from-string targets-json)))
+      (cond
+       ((= (length targets) 1)
+        (elt targets 0))
+       (t
+        (let ((targets-list (append targets nil)))
+          (ido-completing-read "Choose cabal target" targets-list nil t nil nil (car targets-list))))
+       )))
+     )))
 
 (defun ide-backend-mode-dir ()
   "The directory for the project."
